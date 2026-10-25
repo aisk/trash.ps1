@@ -1,6 +1,6 @@
 @{
     RootModule           = 'trash.psm1'
-    ModuleVersion        = '0.1.0'
+    ModuleVersion        = '0.2.0'
     CompatiblePSEditions = @('Desktop', 'Core')
     GUID                 = 'd5f837ac-96a1-4df2-ad2b-0bd274bd0dec'
     Author               = 'An Long'

@@ -317,100 +317,129 @@ function Clear-Trash {
 
 <#
 .SYNOPSIS
-    Short command for everyday Recycle Bin operations.
+    Short command for everyday Recycle Bin operations, with Unix-style options.
 
 .DESCRIPTION
-    By default every given path is moved to the Recycle Bin. The switches select
+    trash [OPTION]... [--] [PATH|PATTERN]...
+
+    By default every given path is moved to the Recycle Bin. Options select
     another operation, each forwarding to the matching command of this module:
 
-        trash <path...>              Move-ItemToTrash
-        trash -Permanent <path...>   Remove-Item -Recurse -Force
-        trash -List [pattern...]     Get-TrashItem
-        trash -Restore <pattern...>  Restore-TrashItem
-        trash -Purge <pattern...>    Remove-TrashItem
-        trash -Empty                 Clear-Trash
+        trash <path...>               Move-ItemToTrash
+        trash --permanent <path...>   Remove-Item -Recurse -Force
+        trash -l, --list [pattern...] Get-TrashItem
+        trash --restore <pattern...>  Restore-TrashItem
+        trash --purge <pattern...>    Remove-TrashItem
+        trash --empty                 Clear-Trash
 
+    Other options:
+
+        -f, --force     Ignore nonexistent paths; do not ask with --purge and --empty
+        -n, --dry-run   Show what would happen without doing it (same as -WhatIf)
+        -v, --verbose   Explain what is being done
+        -h, --help      Show this help
+        -r, -R, -d      Accepted for rm compatibility; directories are always recycled whole
+        '--'            Treat all following arguments as paths. PowerShell consumes a bare --
+                        and splits unquoted -name.ext, so write trash '--' '-name.ext',
+                        or simply trash ./-name.ext
+
+    Short options can be combined (-rf), and long options may also be written
+    PowerShell-style with a single dash (-List, -Restore, -Force, -WhatIf).
     Patterns are matched against the Id, name or original path of Recycle Bin items.
 
 .EXAMPLE
-    trash foo.txt bar\ *.log
+    trash -rf build\ *.log
 
 .EXAMPLE
-    trash -List *.log | trash -Restore
+    trash -l *.log | trash --restore
 #>
 function trash {
-    [CmdletBinding(SupportsShouldProcess)]
-    param(
-        # Paths to recycle, or patterns for -List, -Restore and -Purge.
-        [Parameter(Position = 0, ValueFromPipeline, ValueFromPipelineByPropertyName, ValueFromRemainingArguments)]
-        [Alias('FullName', 'Id')]
-        [string[]] $Path,
+    # Arguments are parsed by hand instead of with param(), so that GNU-style
+    # options (--list, -rf, --) work and unknown options are rejected.
+    $longOptions = @{
+        'list' = 'List'; 'restore' = 'Restore'; 'purge' = 'Purge'; 'empty' = 'Empty'
+        'permanent' = 'Permanent'; 'force' = 'Force'; 'dry-run' = 'DryRun'; 'whatif' = 'DryRun'
+        'verbose' = 'Verbose'; 'help' = 'Help'; 'recursive' = 'Recursive'
+    }
+    $shortOptions = [System.Collections.Generic.Dictionary[char, string]]::new()
+    $shortOptions['l'] = 'List'; $shortOptions['e'] = 'Empty'; $shortOptions['f'] = 'Force'
+    $shortOptions['n'] = 'DryRun'; $shortOptions['v'] = 'Verbose'; $shortOptions['h'] = 'Help'
+    $shortOptions['r'] = 'Recursive'; $shortOptions['R'] = 'Recursive'; $shortOptions['d'] = 'Recursive'
 
-        # Delete directly instead of moving to the Recycle Bin.
-        [switch] $Permanent,
+    $flags = [System.Collections.Generic.HashSet[string]]::new()
+    $operands = [System.Collections.Generic.List[string]]::new()
+    $endOfOptions = $false
 
-        # List Recycle Bin items.
-        [Alias('l')]
-        [switch] $List,
-
-        # Restore matching items to their original location.
-        [Alias('r')]
-        [switch] $Restore,
-
-        # Permanently delete matching items from the Recycle Bin.
-        [switch] $Purge,
-
-        # Empty the Recycle Bin.
-        [Alias('e')]
-        [switch] $Empty,
-
-        # Do not ask for confirmation with -Purge and -Empty.
-        [switch] $Force
-    )
-
-    # A single parameter set keeps `trash a b c` and `trash a -Permanent b` working;
-    # multiple sets combined with ValueFromRemainingArguments confuse the binder.
-    begin {
-        $mode = 'Recycle'
-        $modes = @(foreach ($m in 'List', 'Restore', 'Purge', 'Empty') { if ($PSBoundParameters[$m]) { $m } })
-        if ($modes.Count -gt 1) { throw "-$($modes -join ', -') cannot be used together." }
-        if ($modes.Count -eq 1) { $mode = $modes[0] }
-        if ($Permanent -and $mode -ne 'Recycle') { throw "-Permanent cannot be used with -$mode." }
-        if ($mode -eq 'Empty' -and $Path) { throw '-Empty does not take any path.' }
-        $patterns = [System.Collections.Generic.List[string]]::new()
+    foreach ($arg in @($input) + @($args | ForEach-Object { $_ })) {
+        if ($null -eq $arg) { continue }
+        if ($arg -isnot [string]) {
+            if ($arg.PSObject.TypeNames -contains 'TrashPs.Item') { $flags.Add('TrashItemInput') | Out-Null; $operands.Add($arg.Id) }
+            elseif ($arg -is [System.IO.FileSystemInfo]) { $operands.Add($arg.FullName) }
+            else { $operands.Add("$arg") }
+            continue
+        }
+        if ($endOfOptions -or $arg -eq '-' -or -not $arg.StartsWith('-')) {
+            $operands.Add($arg)
+            continue
+        }
+        if ($arg -eq '--') {
+            $endOfOptions = $true
+            continue
+        }
+        $name = $arg.TrimStart('-')
+        if ($arg.StartsWith('--') -or $longOptions.ContainsKey($name)) {
+            if (-not $longOptions.ContainsKey($name)) { throw "trash: unrecognized option '$arg'. Try 'trash --help'." }
+            $flags.Add($longOptions[$name]) | Out-Null
+            continue
+        }
+        foreach ($c in $name.ToCharArray()) {
+            if (-not $shortOptions.ContainsKey($c)) { throw "trash: invalid option -- '$c'. Try 'trash --help'." }
+            $flags.Add($shortOptions[$c]) | Out-Null
+        }
     }
 
-    process {
-        if ($mode -eq 'Recycle' -and $Path) {
-            if ($_ -and $_.PSObject.TypeNames -contains 'TrashPs.Item') {
-                throw 'Recycle Bin items cannot be recycled again; use -Restore or -Purge.'
-            }
-            if ($Permanent) {
-                foreach ($target in $Path | ForEach-Object { Resolve-TargetPath $_ }) {
-                    if ($PSCmdlet.ShouldProcess($target, 'Delete permanently')) {
-                        Remove-Item -LiteralPath $target -Recurse -Force
-                    }
+    # Piping an empty result (e.g. no matching Get-TrashItem) is not an error.
+    if ($MyInvocation.ExpectingInput -and $operands.Count -eq 0 -and -not $flags.Contains('Help')) { return }
+
+    if ($flags.Contains('Help')) {
+        Get-Help trash -Full
+        return
+    }
+
+    $modes = @('List', 'Restore', 'Purge', 'Empty' | Where-Object { $flags.Contains($_) })
+    if ($modes.Count -gt 1) { throw "trash: --$(($modes -join ', --').ToLower()) cannot be used together." }
+    $mode = if ($modes) { $modes[0] } else { 'Recycle' }
+    $force = $flags.Contains('Force')
+    if ($flags.Contains('Permanent') -and $mode -ne 'Recycle') { throw "trash: --permanent cannot be used with --$($mode.ToLower())." }
+    if ($mode -eq 'Empty' -and $operands.Count) { throw 'trash: --empty does not take any argument.' }
+    if ($mode -in 'Restore', 'Purge' -and $operands.Count -eq 0) { throw "trash: --$($mode.ToLower()) requires at least one Id or pattern." }
+
+    $common = @{}
+    if ($flags.Contains('DryRun')) { $common.WhatIf = $true }
+    if ($flags.Contains('Verbose')) { $common.Verbose = $true }
+
+    switch ($mode) {
+        'Recycle' {
+            if ($flags.Contains('TrashItemInput')) { throw 'trash: Recycle Bin items cannot be recycled again; use --restore or --purge.' }
+            if ($operands.Count -eq 0) { throw "trash: missing operand. Try 'trash --help'." }
+            $paths = @($operands | Where-Object {
+                    # Like rm -f, silently skip paths that do not exist.
+                    -not $force -or (Test-Path -LiteralPath $_) -or (Test-Path -Path $_)
+                })
+            if ($paths.Count -eq 0) { return }
+            if ($flags.Contains('Permanent')) {
+                foreach ($target in $paths | ForEach-Object { Resolve-TargetPath $_ }) {
+                    Remove-Item -LiteralPath $target -Recurse -Force @common
                 }
             }
             else {
-                Move-ItemToTrash -Path $Path
+                Move-ItemToTrash -Path $paths @common
             }
         }
-        # Collect patterns from all pipeline input first, then act on them in end{}.
-        if ($Path) { $patterns.AddRange([string[]]$Path) }
-    }
-
-    end {
-        if ($mode -in 'Restore', 'Purge' -and $patterns.Count -eq 0) {
-            throw "-$mode requires at least one Id or pattern."
-        }
-        switch ($mode) {
-            'Recycle' { if ($patterns.Count -eq 0) { throw 'No path specified. Run "Get-Help trash" for usage.' } }
-            'List' { Get-TrashItem -Filter $patterns }
-            'Restore' { Restore-TrashItem -Filter $patterns }
-            'Purge' { Remove-TrashItem -Filter $patterns -Force:$Force }
-            'Empty' { Clear-Trash -Force:$Force }
-        }
+        'List' { Get-TrashItem -Filter $operands }
+        'Restore' { Restore-TrashItem -Filter $operands @common }
+        'Purge' { Remove-TrashItem -Filter $operands -Force:$force @common }
+        'Empty' { Clear-Trash -Force:$force @common }
     }
 }
 

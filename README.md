@@ -11,23 +11,43 @@ Install-PSResource trash    # or: Install-Module trash
 
 ## The `trash` command
 
+`trash` takes Unix-style options, similar to `rm` and `gio trash`:
+
 ```powershell
 trash foo.txt bar\ *.log            # move to Recycle Bin (wildcards supported)
+trash -rf build\ missing.txt        # -r/-R/-d are accepted for rm compatibility; -f ignores missing paths
 Get-ChildItem *.tmp | trash         # pipeline input
-trash -Permanent big.iso            # delete directly, bypassing the Recycle Bin
+trash --permanent big.iso           # delete directly, bypassing the Recycle Bin
 
-trash -List                         # list Recycle Bin items (alias: -l)
-trash -List *.log 'C:\tmp\*'        # filter by Id, name or original path
+trash -l                            # list Recycle Bin items (--list)
+trash -l *.log 'C:\tmp\*'           # filter by Id, name or original path
 
-trash -Restore report.docx          # restore to the original location (alias: -r)
-trash -List *.log | trash -Restore
+trash --restore report.docx         # restore to the original location
+trash -l *.log | trash --restore
 
-trash -Purge 'C:\tmp\*'             # permanently delete matching items (asks first)
-trash -Purge MWL91K -Force          # by Id, without asking
+trash --purge 'C:\tmp\*'            # permanently delete matching items (asks first)
+trash --purge MWL91K -f             # by Id, without asking
 
-trash -Empty                        # empty the Recycle Bin (alias: -e, asks first)
-trash -Empty -Force
+trash -e                            # empty the Recycle Bin (--empty, asks first)
+trash -e -f
 ```
+
+| Option              | Description                                                   |
+| ------------------- | ------------------------------------------------------------- |
+| `-l`, `--list`      | List Recycle Bin items                                        |
+| `--restore`         | Restore items to their original location                      |
+| `--purge`           | Permanently delete items from the Recycle Bin                 |
+| `-e`, `--empty`     | Empty the Recycle Bin                                         |
+| `--permanent`       | Delete directly instead of recycling                          |
+| `-f`, `--force`     | Ignore nonexistent paths; do not ask with `--purge`/`--empty` |
+| `-n`, `--dry-run`   | Show what would happen (same as `-WhatIf`)                    |
+| `-v`, `--verbose`   | Explain what is being done                                    |
+| `-h`, `--help`      | Show help                                                     |
+| `-r`, `-R`, `-d`    | Accepted for `rm` compatibility, no effect                    |
+
+Short options can be combined (`-rf`), and PowerShell-style spellings such as `-List` or `-WhatIf` also work.
+PowerShell consumes a bare `--` and splits unquoted `-name.ext`, so to recycle a file whose name starts with `-`,
+write `trash ./-name.ext` or `trash '--' '-name.ext'`.
 
 ## Commands
 
